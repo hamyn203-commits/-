@@ -1,0 +1,10 @@
+{
+  "server_url": "http://127.0.0.1:8000",
+  "whatsapp_order_notifications": false,
+  "smtp_server": "",
+  "smtp_port": "587",
+  "smtp_email": "",
+  "smtp_password": "",
+  "auto_backup_enabled": true,
+  "language": "ar"
+}

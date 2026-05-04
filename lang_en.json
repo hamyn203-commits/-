@@ -1,0 +1,11 @@
+{
+  "app_name": "Al Nada Store",
+  "dashboard": "Dashboard",
+  "products": "Products",
+  "pharmacies": "Pharmacies",
+  "orders": "Orders",
+  "payments": "Payments",
+  "reports": "Reports",
+  "settings": "Settings",
+  "logout": "Logout"
+}

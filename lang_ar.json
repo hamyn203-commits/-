@@ -1,0 +1,11 @@
+{
+  "app_name": "مخزن الندا",
+  "dashboard": "الرئيسية",
+  "products": "المنتجات",
+  "pharmacies": "الصيدليات",
+  "orders": "الطلبات",
+  "payments": "التحصيلات",
+  "reports": "التقارير",
+  "settings": "الإعدادات",
+  "logout": "تسجيل الخروج"
+}
