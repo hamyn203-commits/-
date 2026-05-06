@@ -14,6 +14,8 @@ import os
 import json
 import shutil
 import uuid
+import sys
+import sqlite3
 import urllib.parse
 from io import BytesIO
 from pathlib import Path
@@ -72,6 +74,8 @@ class ProductsTab(ctk.CTkFrame):
         self.categories_cache = []
         self.image_cache = {}
         self.tk_images = {}
+        self.thumbnail_cache_version = "v3"
+        self.base_dirs = self._get_runtime_base_dirs()
         
         # Configure the frame
         self.configure(fg_color="#1e1e1e")
@@ -108,10 +112,14 @@ class ProductsTab(ctk.CTkFrame):
         if not source:
             return ""
         source = urllib.parse.unquote(source)
+        source = source.replace("\\\\", "\\")
         if source.lower().startswith("file:///"):
             source = source[8:]
         elif source.lower().startswith("file://"):
             source = source[7:]
+        # Handle paths that sometimes arrive as /D:/folder/file.png
+        if len(source) > 3 and source[0] in ("/", "\\") and source[2] == ":" and source[1].isalpha():
+            source = source[1:]
         expanded = os.path.expanduser(source)
         normalized = os.path.normpath(expanded)
         if not os.path.isabs(normalized):
@@ -122,16 +130,23 @@ class ProductsTab(ctk.CTkFrame):
             return normalized
 
     def _resolve_local_image_path(self, image_source):
-        local_path = self._normalize_local_path(image_source)
+        source_text = str(image_source or "").strip()
+        if source_text.startswith("/product_images/") or source_text.startswith("product_images/") or source_text.startswith("product_images\\"):
+            filename_only = os.path.basename(source_text.replace("\\", "/"))
+            if filename_only:
+                in_library = os.path.join(self.product_images_dir(), filename_only)
+                if os.path.exists(in_library):
+                    return os.path.abspath(in_library)
+        local_path = self._normalize_local_path(source_text)
         if local_path and os.path.exists(local_path):
             return local_path
 
         filename = os.path.basename(local_path or str(image_source or ""))
         if filename:
-            candidates = [
-                os.path.join(self.product_images_dir(), filename),
-                os.path.join(os.getcwd(), filename),
-            ]
+            candidates = [os.path.join(self.product_images_dir(), filename)]
+            for base_dir in self.base_dirs:
+                candidates.append(os.path.join(base_dir, filename))
+                candidates.append(os.path.join(base_dir, "product_images", filename))
             for candidate in candidates:
                 if os.path.exists(candidate):
                     self.debug_image("local-fallback", image_source, f"resolved via fallback: {candidate}")
@@ -150,9 +165,46 @@ class ProductsTab(ctk.CTkFrame):
         return ""
 
     def product_images_dir(self):
-        target_dir = os.path.join(os.getcwd(), "product_images")
+        preferred_roots = list(self.base_dirs) + [os.getcwd()]
+        target_dir = ""
+        for root in preferred_roots:
+            try:
+                candidate = os.path.join(root, "product_images")
+                os.makedirs(candidate, exist_ok=True)
+                target_dir = candidate
+                break
+            except Exception:
+                continue
+        if not target_dir:
+            target_dir = os.path.join(os.getcwd(), "product_images")
+            os.makedirs(target_dir, exist_ok=True)
         os.makedirs(target_dir, exist_ok=True)
         return target_dir
+
+    def _get_runtime_base_dirs(self):
+        """Collect stable base directories for loading/saving product images."""
+        roots = []
+        try:
+            roots.append(os.path.dirname(os.path.abspath(__file__)))
+        except Exception:
+            pass
+        try:
+            if getattr(sys, "frozen", False):
+                roots.append(os.path.dirname(sys.executable))
+        except Exception:
+            pass
+        try:
+            roots.append(os.path.abspath(os.getcwd()))
+        except Exception:
+            pass
+        unique_roots = []
+        seen = set()
+        for root in roots:
+            normalized = os.path.abspath(root)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                unique_roots.append(normalized)
+        return unique_roots
 
     def is_library_image(self, image_source):
         try:
@@ -264,10 +316,19 @@ class ProductsTab(ctk.CTkFrame):
             image = image.convert("RGB")
 
         resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
-        max_inner = max(size - 10, 24)
-        image.thumbnail((max_inner, max_inner), resampling)
+        max_inner = max(size - 12, 24)
+
+        # Always use contain so the entire image is visible inside the square
+        # without any crop, while keeping aspect ratio.
+        fitted = ImageOps.contain(image, (max_inner, max_inner), method=resampling) if ImageOps is not None else image
+        if fitted is image:
+            fitted = image.copy()
+            fitted.thumbnail((max_inner, max_inner), resampling)
+
         canvas = Image.new("RGB", (size, size), "#171717")
-        canvas.paste(image, ((size - image.width) // 2, (size - image.height) // 2))
+        x = (size - fitted.width) // 2
+        y = (size - fitted.height) // 2
+        canvas.paste(fitted, (x, y))
         return canvas
 
     def _trim_safe_outer_whitespace(self, image):
@@ -339,7 +400,7 @@ class ProductsTab(ctk.CTkFrame):
             self.debug_image("thumbnail-skipped", source, "empty source or Pillow unavailable")
             return None
         cache_source = source if self._is_remote_image(source) else (self._resolve_local_image_path(source) or self._normalize_local_path(source))
-        cache_key = (cache_source, size)
+        cache_key = (self.thumbnail_cache_version, cache_source, size)
         if cache_key in self.image_cache:
             return self.image_cache[cache_key]
         try:
@@ -360,10 +421,11 @@ class ProductsTab(ctk.CTkFrame):
     def update_image_widget_from_sources(self, target_label, image_sources, size=72, missing_text="لا توجد صورة", invalid_text="تعذر تحميل الصورة", allow_raw_fallback=False):
         sources = image_sources if isinstance(image_sources, list) else [image_sources]
         valid_sources = [str(source or "").strip() for source in sources if str(source or "").strip()]
+        should_try_raw_fallback = bool(allow_raw_fallback or Image is None)
         for source in valid_sources:
             thumbnail = self._get_thumbnail_image(source, size=size)
             if thumbnail is None:
-                if allow_raw_fallback:
+                if should_try_raw_fallback:
                     fallback_photo = self._load_tk_photo_fallback(source)
                     if fallback_photo is not None:
                         try:
@@ -414,9 +476,27 @@ class ProductsTab(ctk.CTkFrame):
         images = []
         raw_images = product.get("images") if isinstance(product, dict) else None
         if isinstance(raw_images, list):
-            images.extend(raw_images)
+            for item in raw_images:
+                if isinstance(item, dict):
+                    nested_source = item.get("url") or item.get("path") or item.get("image_url") or item.get("image_path")
+                    if nested_source:
+                        images.append(nested_source)
+                else:
+                    images.append(item)
         elif isinstance(raw_images, str) and raw_images.strip():
-            images.append(raw_images)
+            parsed_raw = None
+            try:
+                parsed_raw = json.loads(raw_images)
+            except Exception:
+                parsed_raw = None
+            if isinstance(parsed_raw, list):
+                images.extend(parsed_raw)
+            elif isinstance(parsed_raw, dict):
+                nested_source = parsed_raw.get("url") or parsed_raw.get("path") or parsed_raw.get("image_url") or parsed_raw.get("image_path")
+                if nested_source:
+                    images.append(nested_source)
+            else:
+                images.append(raw_images)
         raw_json = product.get("product_images_json") if isinstance(product, dict) else ""
         if raw_json:
             try:
@@ -569,7 +649,8 @@ class ProductsTab(ctk.CTkFrame):
         dialog.grid_columnconfigure(0, weight=1)
         dialog.grid_rowconfigure(1, weight=1)
 
-        index_var = {"index": max(0, min(int(start_index or 0), len(images) - 1))}
+        preferred_index = max(0, min(int(start_index or 0), len(images) - 1))
+        index_var = {"index": preferred_index}
 
         title = ctk.CTkLabel(dialog, text=self.ar(product_name or "صور المنتج"), font=("Arial", 20, "bold"), text_color="#ffffff", anchor="e")
         title.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
@@ -587,6 +668,24 @@ class ProductsTab(ctk.CTkFrame):
         controls.grid_columnconfigure(1, weight=1)
         counter_label = ctk.CTkLabel(controls, text="", text_color="#bdbdbd", font=("Arial", 13, "bold"))
         counter_label.grid(row=0, column=1)
+
+        def advance_to_valid_index(from_index):
+            if not images:
+                return from_index
+            total = len(images)
+            for step in range(total):
+                candidate = (from_index + step) % total
+                source = images[candidate]
+                image = self._load_pil_image(source)
+                if image is not None:
+                    return candidate
+                fallback_photo = self._load_tk_photo_fallback(source)
+                if fallback_photo is not None:
+                    self.tk_images[("gallery-probe-fallback", source, candidate)] = fallback_photo
+                    return candidate
+            return from_index
+
+        index_var["index"] = advance_to_valid_index(index_var["index"])
 
         def render_current():
             source = images[index_var["index"]]
@@ -614,6 +713,10 @@ class ProductsTab(ctk.CTkFrame):
                     raise ValueError("display image creation failed")
             except Exception as exc:
                 self.debug_image("gallery-display-failed", source, "gallery could not display source", exc)
+                next_index = advance_to_valid_index((index_var["index"] + 1) % len(images))
+                if next_index != index_var["index"]:
+                    index_var["index"] = next_index
+                    return render_current()
                 image_label.configure(text="تعذر معاينة الصورة", image="")
                 image_label.image = None
             counter_label.configure(text=f"{index_var['index'] + 1} / {len(images)}")
@@ -1051,6 +1154,18 @@ class ProductsTab(ctk.CTkFrame):
         )
         self.import_excel_btn.pack(side="left", padx=(10, 12), pady=10)
 
+        self.import_sql_btn = ctk.CTkButton(
+            search_frame,
+            text=self.ar("استيراد SQL"),
+            width=110,
+            height=36,
+            font=("Arial", 12, "bold"),
+            fg_color="#00ACC1",
+            hover_color="#0097A7",
+            command=self.import_products_from_sql_database,
+        )
+        self.import_sql_btn.pack(side="left", padx=(0, 12), pady=10)
+
         self.add_btn = ctk.CTkButton(
             self.top_frame,
             text=self.ar("إضافة منتج جديد"),
@@ -1064,7 +1179,82 @@ class ProductsTab(ctk.CTkFrame):
         self.add_btn.pack(side="right")
         if not self.can_manage_products():
             self.import_excel_btn.configure(state="disabled")
+            self.import_sql_btn.configure(state="disabled")
             self.add_btn.configure(state="disabled")
+
+        toolbar_frame = ctk.CTkFrame(self, fg_color="#252525", corner_radius=12, border_width=1, border_color="#343434")
+        toolbar_frame.pack(fill="x", padx=20, pady=(0, 10))
+        toolbar_frame.grid_columnconfigure(0, weight=1)
+        toolbar_frame.grid_columnconfigure(1, weight=0)
+        toolbar_frame.grid_columnconfigure(2, weight=0)
+        ctk.CTkLabel(
+            toolbar_frame,
+            text=self.ar("فلترة سريعة"),
+            font=("Arial", 12, "bold"),
+            text_color="#bdbdbd",
+            anchor="e",
+            justify="right",
+        ).grid(row=0, column=0, sticky="e", padx=(10, 6), pady=8)
+        self.sort_menu = ctk.CTkOptionMenu(
+            toolbar_frame,
+            values=[
+                "الأحدث أولاً",
+                "الأقدم أولاً",
+                "الاسم أ-ي",
+                "الاسم ي-أ",
+                "السعر الأعلى",
+                "السعر الأقل",
+                "الأكثر كمية",
+                "الأقل كمية",
+            ],
+            width=170,
+            height=32,
+            font=("Arial", 12),
+            command=lambda _v: self.load_products(),
+        )
+        self.sort_menu.set("الأحدث أولاً")
+        self.sort_menu.grid(row=0, column=1, sticky="e", padx=(0, 10), pady=8)
+        ctk.CTkLabel(
+            toolbar_frame,
+            text=self.ar("ترتيب"),
+            font=("Arial", 12),
+            text_color="#bdbdbd",
+            anchor="e",
+            justify="right",
+        ).grid(row=0, column=2, sticky="e", padx=(0, 10), pady=8)
+
+        quick_filters = ctk.CTkFrame(toolbar_frame, fg_color="transparent")
+        quick_filters.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+        quick_filters.grid_columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="qf")
+        self.quick_filter_buttons = {}
+        quick_defs = [
+            ("all", "عرض الكل", "#4CAF50", None),
+            ("out_of_stock", "نافد", "#f44336", "out_of_stock"),
+            ("low_stock", "منخفض", "#FF9800", "low_stock"),
+            ("expired", "منتهي", "#E91E63", "expired"),
+            ("expiring_soon", "ينتهي قريبًا", "#03A9F4", "expiring_soon"),
+        ]
+        for idx, (key, title, color, filt) in enumerate(quick_defs):
+            btn = ctk.CTkButton(
+                quick_filters,
+                text=self.ar(title),
+                height=32,
+                font=("Arial", 11, "bold"),
+                fg_color=color if (filt and self.active_filter == filt) or (filt is None and not self.active_filter) else "#3a3a3a",
+                hover_color=color,
+                command=lambda f=filt: self.set_quick_filter(f),
+            )
+            btn.grid(row=0, column=idx, sticky="ew", padx=4, pady=2)
+            self.quick_filter_buttons[key] = (btn, color, filt)
+
+        self.kpi_frame = ctk.CTkFrame(self, fg_color="#252525", corner_radius=12, border_width=1, border_color="#343434")
+        self.kpi_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self.kpi_frame.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="kpi")
+        self.kpi_cards = {}
+        self.kpi_cards["total"] = self.create_kpi_card(self.kpi_frame, 0, "إجمالي المنتجات", "0", "#4CAF50")
+        self.kpi_cards["available"] = self.create_kpi_card(self.kpi_frame, 1, "متوفر", "0", "#00BCD4")
+        self.kpi_cards["low"] = self.create_kpi_card(self.kpi_frame, 2, "منخفض المخزون", "0", "#FF9800")
+        self.kpi_cards["out"] = self.create_kpi_card(self.kpi_frame, 3, "نافد", "0", "#f44336")
 
         self.filter_frame = ctk.CTkFrame(self, fg_color="#2d2d2d", corner_radius=8)
         if self.active_filter or self.active_category:
@@ -1101,6 +1291,80 @@ class ProductsTab(ctk.CTkFrame):
         
         # Dictionary to store product rows
         self.rows = {}
+
+    def create_kpi_card(self, parent, column, title, value, color):
+        card = ctk.CTkFrame(parent, fg_color="#1f1f1f", corner_radius=10, border_width=1, border_color="#353535")
+        card.grid(row=0, column=column, sticky="ew", padx=6, pady=8)
+        ctk.CTkLabel(
+            card,
+            text=self.ar(title),
+            font=("Arial", 12),
+            text_color="#bdbdbd",
+            anchor="e",
+            justify="right",
+        ).pack(fill="x", padx=10, pady=(8, 2))
+        value_label = ctk.CTkLabel(
+            card,
+            text=str(value),
+            font=("Arial", 20, "bold"),
+            text_color=color,
+            anchor="e",
+            justify="right",
+        )
+        value_label.pack(fill="x", padx=10, pady=(0, 8))
+        return value_label
+
+    def set_quick_filter(self, filter_key):
+        self.active_filter = filter_key
+        self.load_products()
+
+    def update_quick_filter_buttons(self):
+        for _key, (btn, color, filt) in self.quick_filter_buttons.items():
+            is_active = (filt and self.active_filter == filt) or (filt is None and not self.active_filter)
+            btn.configure(fg_color=color if is_active else "#3a3a3a")
+
+    def apply_sort_mode(self, products):
+        sort_mode = self.sort_menu.get() if hasattr(self, "sort_menu") else "الأحدث أولاً"
+        items = list(products or [])
+        if sort_mode == "الأقدم أولاً":
+            items.sort(key=lambda x: x.get("id", 0))
+        elif sort_mode == "الاسم أ-ي":
+            items.sort(key=lambda x: str(x.get("name", "")).strip().lower())
+        elif sort_mode == "الاسم ي-أ":
+            items.sort(key=lambda x: str(x.get("name", "")).strip().lower(), reverse=True)
+        elif sort_mode == "السعر الأعلى":
+            items.sort(key=lambda x: self.get_product_price(x), reverse=True)
+        elif sort_mode == "السعر الأقل":
+            items.sort(key=lambda x: self.get_product_price(x))
+        elif sort_mode == "الأكثر كمية":
+            items.sort(key=lambda x: int(x.get("quantity") or 0), reverse=True)
+        elif sort_mode == "الأقل كمية":
+            items.sort(key=lambda x: int(x.get("quantity") or 0))
+        else:
+            items.sort(key=lambda x: x.get("id", 0), reverse=True)
+        return items
+
+    def update_kpis(self, products):
+        product_list = products if isinstance(products, list) else []
+        total = len(product_list)
+        available = 0
+        low = 0
+        out = 0
+        for product in product_list:
+            try:
+                qty = int(product.get("quantity") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if self.is_out_of_stock(qty):
+                out += 1
+            elif self.is_low_stock(qty):
+                low += 1
+            else:
+                available += 1
+        self.kpi_cards["total"].configure(text=str(total))
+        self.kpi_cards["available"].configure(text=str(available))
+        self.kpi_cards["low"].configure(text=str(low))
+        self.kpi_cards["out"].configure(text=str(out))
     
     def create_headers(self):
         """Create a compact list header that matches the card layout."""
@@ -1145,6 +1409,8 @@ class ProductsTab(ctk.CTkFrame):
         # Check server health first
         if not self.check_server_health():
             self.update_status("⚠️ السيرفر غير متصل")
+            self.update_kpis([])
+            self.update_quick_filter_buttons()
             self.clear_rows()
             self.show_empty_message(
                 "⚠️ السيرفر غير متصل\n\n"
@@ -1155,6 +1421,9 @@ class ProductsTab(ctk.CTkFrame):
         
         try:
             self.update_status("جاري تحميل المنتجات...")
+            self.update_quick_filter_buttons()
+            self.image_cache.clear()
+            self.tk_images.clear()
             
             products = self.apply_category_filter(self.apply_active_filter(self.api_client.get_products()))
             
@@ -1162,6 +1431,7 @@ class ProductsTab(ctk.CTkFrame):
             self.clear_rows()
 
             if (self.active_filter or self.active_category) and (not products or len(products) == 0):
+                self.update_kpis([])
                 if self.active_category:
                     self.show_empty_message(f"لا توجد منتجات في هذا التصنيف: {self.active_category}")
                     self.update_status(f"لا توجد منتجات في هذا التصنيف: {self.active_category}")
@@ -1171,12 +1441,14 @@ class ProductsTab(ctk.CTkFrame):
                 return
             
             if not products or len(products) == 0:
+                self.update_kpis([])
                 self.show_empty_message("📦 لا توجد منتجات\nاضغط على 'إضافة منتج جديد' لإضافة منتج")
                 self.update_status("لا توجد منتجات")
                 return
             
             products = self.apply_category_filter(self.apply_active_filter(products))
             if (self.active_filter or self.active_category) and not products:
+                self.update_kpis([])
                 if self.active_category:
                     self.show_empty_message(f"لا توجد منتجات في هذا التصنيف: {self.active_category}")
                     self.update_status(f"لا توجد منتجات في هذا التصنيف: {self.active_category}")
@@ -1185,8 +1457,9 @@ class ProductsTab(ctk.CTkFrame):
                 self.update_status(f"لا توجد نتائج داخل فلتر: {self.get_filter_label()}")
                 return
 
-            # Sort products by id
-            products.sort(key=lambda x: x.get("id", 0))
+            # Sort products by selected mode
+            products = self.apply_sort_mode(products)
+            self.update_kpis(products)
             
             # Display products
             for idx, product in enumerate(products, start=1):
@@ -1202,6 +1475,8 @@ class ProductsTab(ctk.CTkFrame):
                 
         except Exception as e:
             self.update_status("❌ خطأ في تحميل المنتجات")
+            self.update_kpis([])
+            self.update_quick_filter_buttons()
             self.clear_rows()
             self.show_empty_message(f"⚠️ حدث خطأ أثناء تحميل المنتجات\n\n{str(e)}")
     
@@ -1216,24 +1491,30 @@ class ProductsTab(ctk.CTkFrame):
         # Check server health first
         if not self.check_server_health():
             self.update_status("⚠️ السيرفر غير متصل")
+            self.update_kpis([])
+            self.update_quick_filter_buttons()
             self.clear_rows()
             self.show_empty_message("⚠️ السيرفر غير متصل\nتأكد من تشغيل السيرفر")
             return
         
         try:
             self.update_status(f"جاري البحث عن: {search_term}")
+            self.image_cache.clear()
+            self.tk_images.clear()
             
-            products = self.apply_category_filter(self.api_client.get_products(search=search_term))
+            self.update_quick_filter_buttons()
+            products = self.apply_active_filter(self.apply_category_filter(self.api_client.get_products(search=search_term)))
             
             # Clear existing rows
             self.clear_rows()
             
             if not products or len(products) == 0:
                 # Try local filtering as fallback
-                all_products = self.apply_category_filter(self.api_client.get_products())
+                all_products = self.apply_active_filter(self.apply_category_filter(self.api_client.get_products()))
                 products = [p for p in all_products if search_term.lower() in p.get("name", "").lower()]
                 
                 if not products:
+                    self.update_kpis([])
                     if self.active_category:
                         self.show_empty_message(f"لا توجد منتجات في هذا التصنيف تطابق البحث: {self.active_category}")
                         self.update_status(f"لا توجد نتائج داخل تصنيف: {self.active_category}")
@@ -1242,8 +1523,8 @@ class ProductsTab(ctk.CTkFrame):
                         self.update_status(f"لا توجد نتائج لـ '{search_term}'")
                     return
             
-            # Sort products by id
-            products.sort(key=lambda x: x.get("id", 0))
+            products = self.apply_sort_mode(products)
+            self.update_kpis(products)
             
             for idx, product in enumerate(products, start=1):
                 self.add_product_row(product, idx)
@@ -1252,6 +1533,8 @@ class ProductsTab(ctk.CTkFrame):
                 
         except Exception as e:
             self.update_status("❌ خطأ في البحث")
+            self.update_kpis([])
+            self.update_quick_filter_buttons()
             self.show_error(f"فشل البحث: {str(e)}")
 
     def create_info_pair(self, parent, label, value, value_color="#ffffff"):
@@ -1351,7 +1634,8 @@ class ProductsTab(ctk.CTkFrame):
             product_images,
             size=76,
             missing_text="لا توجد صورة",
-            invalid_text="تعذر تحميل الصورة"
+            invalid_text="تعذر تحميل الصورة",
+            allow_raw_fallback=True
         )
 
         ctk.CTkLabel(
@@ -1376,7 +1660,10 @@ class ProductsTab(ctk.CTkFrame):
             ).place(relx=1.0, y=94, x=-10, anchor="ne")
 
         def open_gallery(_event=None):
-            self.show_product_image_gallery(product.get("name", ""), product_images)
+            start_at = 0
+            if loaded_image_source in product_images:
+                start_at = product_images.index(loaded_image_source)
+            self.show_product_image_gallery(product.get("name", ""), product_images, start_index=start_at)
 
         if product_images:
             for clickable in (media_frame, image_box, image_label):
@@ -1555,6 +1842,155 @@ class ProductsTab(ctk.CTkFrame):
             self.update_status(f"تم استيراد {added} منتج من Excel")
         except Exception as e:
             self.show_error(f"فشل استيراد الملف:\n{str(e)}")
+
+    def import_products_from_sql_database(self):
+        """Import products from a SQLite database file."""
+        if not self.can_manage_products():
+            self.show_permission_denied()
+            return
+
+        db_path = filedialog.askopenfilename(
+            title=self.ar("اختيار قاعدة بيانات SQL"),
+            filetypes=[
+                ("SQLite DB", "*.db *.sqlite *.sqlite3"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not db_path:
+            return
+
+        if not self.check_server_health():
+            self.show_error("السيرفر غير متصل. تأكد من تشغيل السيرفر")
+            return
+
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            tables = [row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            preferred = ["products", "product", "items", "inventory", "stock_products"]
+            table_name = ""
+            for candidate in preferred:
+                if candidate in tables:
+                    table_name = candidate
+                    break
+            if not table_name and tables:
+                table_name = tables[0]
+            if not table_name:
+                self.show_error("لم يتم العثور على أي جدول داخل قاعدة البيانات")
+                return
+
+            columns_info = cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+            if not columns_info:
+                self.show_error(f"لم يتم العثور على أعمدة في الجدول: {table_name}")
+                return
+            columns = [str(col["name"] if isinstance(col, sqlite3.Row) else col[1]) for col in columns_info]
+
+            def pick_col(options):
+                for option in options:
+                    if option in columns:
+                        return option
+                return None
+
+            col_name = pick_col(["name", "product_name", "title"])
+            col_price = pick_col(["price", "unit_price", "sell_price"])
+            col_quantity = pick_col(["quantity", "qty", "stock", "amount"])
+            col_expiry = pick_col(["expiry_date", "expiry", "exp_date", "expire_date"])
+            col_image = pick_col(["image_url", "image", "image_path", "photo", "picture"])
+            col_desc = pick_col(["description", "desc", "notes", "details"])
+
+            if not col_name or not col_price or not col_quantity:
+                self.show_error(
+                    "الجدول لا يحتوي على الأعمدة الأساسية المطلوبة.\n\n"
+                    "مطلوب على الأقل:\n"
+                    "• اسم المنتج (name)\n"
+                    "• السعر (price)\n"
+                    "• الكمية (quantity)"
+                )
+                return
+
+            selected_cols = [col_name, col_price, col_quantity]
+            for optional_col in (col_expiry, col_image, col_desc):
+                if optional_col and optional_col not in selected_cols:
+                    selected_cols.append(optional_col)
+
+            query = f"SELECT {', '.join(selected_cols)} FROM {table_name}"
+            rows = cursor.execute(query).fetchall()
+            if not rows:
+                self.show_warning("لا توجد بيانات منتجات داخل الجدول المحدد")
+                return
+
+            added = 0
+            failed = 0
+            for row in rows:
+                try:
+                    name = str(row[col_name] or "").strip()
+                    if not name:
+                        failed += 1
+                        continue
+
+                    price = float(row[col_price] or 0.0)
+                    quantity = int(row[col_quantity] or 0)
+                    if price <= 0 or quantity < 0:
+                        failed += 1
+                        continue
+
+                    expiry_date = ""
+                    if col_expiry:
+                        raw_expiry = str(row[col_expiry] or "").strip()
+                        if raw_expiry:
+                            try:
+                                expiry_date = self.normalize_expiry_date(raw_expiry)
+                            except Exception:
+                                expiry_date = ""
+
+                    image_source = ""
+                    images = []
+                    if col_image:
+                        raw_image = str(row[col_image] or "").strip()
+                        if raw_image:
+                            image_source = raw_image
+                            if not self._is_remote_image(raw_image):
+                                imported = self.import_product_image_to_library(raw_image)
+                                image_source = imported or raw_image
+                            images = [image_source] if image_source else []
+
+                    description = str(row[col_desc] or "").strip() if col_desc else ""
+                    result = self.api_client.create_product(
+                        name=name,
+                        price=price,
+                        quantity=quantity,
+                        expiry_date=expiry_date,
+                        image_path="",
+                        image_url=image_source if image_source else "",
+                        is_active=1,
+                        category_id=None,
+                        description=description,
+                        images=images,
+                    )
+                    if result:
+                        added += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+
+            self.load_products()
+            self.show_info(
+                f"تم استيراد بيانات SQL بنجاح\n\n"
+                f"الجدول: {table_name}\n"
+                f"تمت الإضافة: {added}\n"
+                f"فشل: {failed}"
+            )
+            self.update_status(f"تم استيراد {added} منتج من قاعدة SQL")
+        except Exception as e:
+            self.show_error(f"فشل استيراد قاعدة SQL:\n{str(e)}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
     
     def choose_product_image(self, image_var, label):
         """Choose image path for a product."""

@@ -21,6 +21,7 @@ import os
 import hashlib
 import urllib.parse
 import webbrowser
+from sqlalchemy import inspect
 
 # ========== LOGGING ==========
 logging.basicConfig(level=logging.INFO)
@@ -189,6 +190,20 @@ class Payment(Base):
     
     pharmacy = relationship("Pharmacy", back_populates="payments")
 
+class Return(Base):
+    __tablename__ = "returns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pharmacy_id = Column(Integer, ForeignKey("pharmacies.id"), nullable=False)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
+    amount = Column(Float, nullable=False)
+    notes = Column(String, default="")
+    balance_before = Column(Float, default=0.0)
+    balance_after = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.now)
+
+    pharmacy = relationship("Pharmacy")
+
 
 class User(Base):
     __tablename__ = "users"
@@ -316,6 +331,42 @@ def ensure_database_schema():
                 "unit_cost FLOAT DEFAULT 0.0, "
                 "total_cost FLOAT DEFAULT 0.0)"
             ))
+
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS returns ("
+                "id INTEGER PRIMARY KEY, "
+                "pharmacy_id INTEGER NOT NULL, "
+                "order_id INTEGER, "
+                "amount FLOAT NOT NULL, "
+                "notes TEXT DEFAULT '', "
+                "balance_before FLOAT DEFAULT 0.0, "
+                "balance_after FLOAT DEFAULT 0.0, "
+                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+            ))
+
+            result = conn.execute(text("PRAGMA table_info(returns)")).fetchall()
+            returns_existing = [row[1] for row in result]
+            returns_columns = {
+                "order_id": "ALTER TABLE returns ADD COLUMN order_id INTEGER",
+                "notes": "ALTER TABLE returns ADD COLUMN notes TEXT DEFAULT ''",
+                "balance_before": "ALTER TABLE returns ADD COLUMN balance_before FLOAT DEFAULT 0.0",
+                "balance_after": "ALTER TABLE returns ADD COLUMN balance_after FLOAT DEFAULT 0.0",
+                "created_at": "ALTER TABLE returns ADD COLUMN created_at DATETIME",
+            }
+            for col, sql in returns_columns.items():
+                if col not in returns_existing:
+                    try:
+                        conn.execute(text(sql))
+                        logger.info(f"Added column {col} to returns table")
+                    except Exception as e:
+                        logger.warning(f"Could not add column {col} to returns: {e}")
+            try:
+                conn.execute(text("UPDATE returns SET notes = '' WHERE notes IS NULL"))
+                conn.execute(text("UPDATE returns SET balance_before = 0.0 WHERE balance_before IS NULL"))
+                conn.execute(text("UPDATE returns SET balance_after = 0.0 WHERE balance_after IS NULL"))
+                conn.execute(text("UPDATE returns SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+            except Exception as e:
+                logger.warning(f"Could not update NULL values in returns: {e}")
 
             # التحقق من جدول products
             result = conn.execute(text("PRAGMA table_info(products)")).fetchall()
@@ -806,6 +857,49 @@ class AuditLogResponse(BaseModel):
         class Config:
             from_attributes = True
 
+class ReturnCreate(BaseModel):
+    pharmacy_id: int
+    amount: float
+    order_id: Optional[int] = None
+    notes: str = ""
+    created_at: Optional[datetime] = None
+
+
+class ReturnResponse(BaseModel):
+    id: int
+    pharmacy_id: int
+    order_id: Optional[int] = None
+    amount: float
+    notes: str = ""
+    balance_before: float = 0.0
+    balance_after: float = 0.0
+    created_at: datetime
+
+    if hasattr(BaseModel, "model_config"):
+        model_config = ConfigDict(from_attributes=True)
+    else:
+        class Config:
+            from_attributes = True
+
+class AccountStatementEntry(BaseModel):
+    date: datetime
+    movement_type: str
+    reference: str
+    description: str
+    debit: float = 0.0
+    credit: float = 0.0
+    running_balance: float = 0.0
+
+class PharmacyAccountStatementResponse(BaseModel):
+    pharmacy_id: int
+    pharmacy_name: str
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    opening_balance: float = 0.0
+    current_balance: float = 0.0
+    totals: dict
+    entries: List[AccountStatementEntry]
+
 # ========== FASTAPI APP ==========
 app = FastAPI(title="Pharmacy Management System", version="1.1")
 
@@ -886,6 +980,15 @@ def is_whatsapp_notifications_enabled():
 
 def normalize_phone(phone):
     return "".join(ch for ch in str(phone or "") if ch.isdigit())
+
+def parse_yyyy_mm_dd(value: Optional[str]) -> Optional[datetime]:
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except Exception:
+        return None
 
 def open_whatsapp_message(phone, message):
     clean_phone = normalize_phone(phone)
@@ -1042,9 +1145,53 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/audit-logs", response_model=List[AuditLogResponse])
-def get_audit_logs(limit: int = 100, db: Session = Depends(get_db)):
-    limit = max(1, min(int(limit or 100), 500))
-    logs = db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit).all()
+def get_audit_logs(
+    limit: int = 100,
+    offset: int = 0,
+    username: Optional[str] = None,
+    action: Optional[str] = None,
+    entity: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    limit = max(1, min(int(limit or 100), 1000))
+    offset = max(0, int(offset or 0))
+    
+    query = db.query(AuditLog)
+    
+    if username:
+        query = query.filter(AuditLog.username.ilike(f"%{username}%"))
+    if action:
+        query = query.filter(AuditLog.action.ilike(f"%{action}%"))
+    if entity:
+        query = query.filter(AuditLog.entity.ilike(f"%{entity}%"))
+    
+    if search:
+        query = query.filter(
+            (AuditLog.username.ilike(f"%{search}%")) |
+            (AuditLog.action.ilike(f"%{search}%")) |
+            (AuditLog.entity.ilike(f"%{search}%")) |
+            (AuditLog.details.ilike(f"%{search}%"))
+        )
+    
+    if date_from:
+        try:
+            from_date = datetime.strptime(date_from, "%Y-%m-%d")
+            query = query.filter(AuditLog.created_at >= from_date)
+        except ValueError:
+            pass
+            
+    if date_to:
+        try:
+            to_date = datetime.strptime(date_to, "%Y-%m-%d")
+            to_date = to_date.replace(hour=23, minute=59, second=59)
+            query = query.filter(AuditLog.created_at <= to_date)
+        except ValueError:
+            pass
+    
+    logs = query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
     return logs
 
 
@@ -2110,6 +2257,305 @@ def get_pharmacy_payments(pharmacy_id: int, db: Session = Depends(get_db)):
         payment_notes=p.payment_notes or "",
         date=p.date
     ) for p in payments]
+
+
+@app.post("/returns", response_model=ReturnResponse, status_code=status.HTTP_201_CREATED)
+def create_return(payload: ReturnCreate, db: Session = Depends(get_db)):
+    pharmacy = db.query(Pharmacy).filter(Pharmacy.id == payload.pharmacy_id).first()
+    if not pharmacy:
+        raise HTTPException(status_code=404, detail="Pharmacy not found")
+
+    amount = float(payload.amount or 0.0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Return amount must be greater than zero")
+
+    order_id = payload.order_id
+    if order_id:
+        order = db.query(Order).filter(Order.id == order_id, Order.pharmacy_id == payload.pharmacy_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found for this pharmacy")
+
+    balance_before = float(pharmacy.balance or 0.0)
+    balance_after = max(balance_before - amount, 0.0)
+    created_at = payload.created_at or datetime.now()
+
+    new_return = Return(
+        pharmacy_id=payload.pharmacy_id,
+        order_id=order_id,
+        amount=amount,
+        notes=(payload.notes or "").strip(),
+        balance_before=balance_before,
+        balance_after=balance_after,
+        created_at=created_at,
+    )
+    db.add(new_return)
+
+    pharmacy.balance = balance_after
+    log_action(db, "create", "return", payload.pharmacy_id, f"amount={amount}, pharmacy={pharmacy.name}, order_id={order_id or ''}")
+
+    db.commit()
+    db.refresh(new_return)
+    return ReturnResponse(
+        id=new_return.id,
+        pharmacy_id=new_return.pharmacy_id,
+        order_id=new_return.order_id,
+        amount=float(new_return.amount or 0.0),
+        notes=new_return.notes or "",
+        balance_before=float(new_return.balance_before or 0.0),
+        balance_after=float(new_return.balance_after or 0.0),
+        created_at=new_return.created_at or datetime.now(),
+    )
+
+
+@app.get("/returns", response_model=List[ReturnResponse])
+def get_returns(pharmacy_id: Optional[int] = None, limit: int = 200, db: Session = Depends(get_db)):
+    limit = max(1, min(int(limit or 200), 1000))
+    query = db.query(Return)
+    if pharmacy_id:
+        query = query.filter(Return.pharmacy_id == pharmacy_id)
+    rows = query.order_by(Return.created_at.desc()).limit(limit).all()
+    return [
+        ReturnResponse(
+            id=r.id,
+            pharmacy_id=r.pharmacy_id,
+            order_id=r.order_id,
+            amount=float(r.amount or 0.0),
+            notes=r.notes or "",
+            balance_before=float(r.balance_before or 0.0),
+            balance_after=float(r.balance_after or 0.0),
+            created_at=r.created_at or datetime.now(),
+        )
+        for r in rows
+    ]
+
+
+@app.get("/pharmacies/{pharmacy_id}/returns", response_model=List[ReturnResponse])
+def get_pharmacy_returns(pharmacy_id: int, limit: int = 200, db: Session = Depends(get_db)):
+    pharmacy = db.query(Pharmacy).filter(Pharmacy.id == pharmacy_id).first()
+    if not pharmacy:
+        raise HTTPException(status_code=404, detail="Pharmacy not found")
+    limit = max(1, min(int(limit or 200), 1000))
+    rows = (
+        db.query(Return)
+        .filter(Return.pharmacy_id == pharmacy_id)
+        .order_by(Return.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        ReturnResponse(
+            id=r.id,
+            pharmacy_id=r.pharmacy_id,
+            order_id=r.order_id,
+            amount=float(r.amount or 0.0),
+            notes=r.notes or "",
+            balance_before=float(r.balance_before or 0.0),
+            balance_after=float(r.balance_after or 0.0),
+            created_at=r.created_at or datetime.now(),
+        )
+        for r in rows
+    ]
+
+@app.get("/pharmacies/{pharmacy_id}/account-statement", response_model=PharmacyAccountStatementResponse)
+def get_pharmacy_account_statement(
+    pharmacy_id: int,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Unified ledger-style account statement for a pharmacy.
+    Combines orders (debit) and payments (credit) into one movement list,
+    sorted by date, with a running balance.
+    """
+    pharmacy = db.query(Pharmacy).filter(Pharmacy.id == pharmacy_id).first()
+    if not pharmacy:
+        raise HTTPException(status_code=404, detail="Pharmacy not found")
+
+    from_dt = parse_yyyy_mm_dd(date_from)
+    to_dt = parse_yyyy_mm_dd(date_to)
+    if date_from and not from_dt:
+        raise HTTPException(status_code=400, detail="Invalid date_from. Expected YYYY-MM-DD")
+    if date_to and not to_dt:
+        raise HTTPException(status_code=400, detail="Invalid date_to. Expected YYYY-MM-DD")
+    if to_dt:
+        # inclusive end of day
+        to_dt = to_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    def order_effective_date(order: Order) -> datetime:
+        # Balance is charged when order gets reviewed (pending -> reviewed).
+        # We don't have a dedicated charged_at, so we use last_status_update when available,
+        # otherwise created_at.
+        return order.last_status_update or order.created_at or datetime.now()
+
+    inspector = inspect(engine)
+    available_tables = set(inspector.get_table_names() or [])
+
+    def is_financial_order(order: Order) -> bool:
+        status_value = normalize_order_status(order.status)
+        return status_value not in {OrderStatus.PENDING.value, OrderStatus.CANCELLED.value}
+
+    orders_query = db.query(Order).filter(Order.pharmacy_id == pharmacy_id)
+    payments_query = db.query(Payment).filter(Payment.pharmacy_id == pharmacy_id)
+
+    all_orders = [o for o in orders_query.all() if is_financial_order(o)]
+    all_payments = payments_query.all()
+
+    # opening balance is the net movement before date_from
+    opening_balance = 0.0
+    if from_dt:
+        before_orders = [o for o in all_orders if order_effective_date(o) < from_dt]
+        before_payments = [p for p in all_payments if (p.date or datetime.now()) < from_dt]
+        opening_balance = sum(float(o.final_total or o.total_amount or 0.0) for o in before_orders) - sum(float(p.amount or 0.0) for p in before_payments)
+
+    entries_raw = []
+
+    def in_range(dt: datetime) -> bool:
+        if from_dt and dt < from_dt:
+            return False
+        if to_dt and dt > to_dt:
+            return False
+        return True
+
+    for order in all_orders:
+        amount = float(order.final_total or order.total_amount or 0.0)
+        dt = order_effective_date(order)
+        if not in_range(dt):
+            continue
+        entries_raw.append({
+            "date": dt,
+            "movement_type": "order",
+            "reference": order.order_number or f"#{order.id}",
+            "description": f"طلب #{order.id} - إضافة على الحساب",
+            "debit": round(amount, 2),
+            "credit": 0.0,
+        })
+
+    for payment in all_payments:
+        dt = payment.date or datetime.now()
+        if not in_range(dt):
+            continue
+        amount = float(payment.amount or 0.0)
+        ref = f"PAY-{payment.id}"
+        if payment.order_id:
+            ref = f"PAY-{payment.id}/ORD-{payment.order_id}"
+        note = (payment.payment_notes or "").strip()
+        desc = "تحصيل نقدي"
+        if payment.order_id:
+            desc = f"تحصيل على طلب #{payment.order_id}"
+        if note:
+            desc = f"{desc} - {note}"
+        entries_raw.append({
+            "date": dt,
+            "movement_type": "payment",
+            "reference": ref,
+            "description": desc,
+            "debit": 0.0,
+            "credit": round(amount, 2),
+        })
+
+    # Optional future tables: returns / adjustments (only if they exist)
+    # We only read if tables exist to keep DB compatibility safe.
+    if "returns" in available_tables:
+        try:
+            rows = db.execute(text(
+                "SELECT id, pharmacy_id, amount, created_at, notes, order_id FROM returns WHERE pharmacy_id = :pid"
+            ), {"pid": pharmacy_id}).fetchall()
+            for row in rows or []:
+                try:
+                    dt = row[3] or datetime.now()
+                except Exception:
+                    dt = datetime.now()
+                if not in_range(dt):
+                    continue
+                amount = float(row[2] or 0.0)
+                order_id = row[5]
+                entries_raw.append({
+                    "date": dt,
+                    "movement_type": "return",
+                    "reference": f"RET-{row[0]}" + (f"/ORD-{order_id}" if order_id else ""),
+                    "description": f"مرتجع #{row[0]}" + (f" على طلب #{order_id}" if order_id else ""),
+                    "debit": 0.0,
+                    "credit": round(amount, 2),
+                })
+        except Exception:
+            pass
+
+    if "balance_adjustments" in available_tables:
+        try:
+            rows = db.execute(text(
+                "SELECT id, pharmacy_id, amount, created_at, note FROM balance_adjustments WHERE pharmacy_id = :pid"
+            ), {"pid": pharmacy_id}).fetchall()
+            for row in rows or []:
+                dt = row[3] or datetime.now()
+                if not in_range(dt):
+                    continue
+                amount = float(row[2] or 0.0)
+                note = (row[4] or "").strip()
+                if amount >= 0:
+                    debit = round(amount, 2)
+                    credit = 0.0
+                else:
+                    debit = 0.0
+                    credit = round(abs(amount), 2)
+                entries_raw.append({
+                    "date": dt,
+                    "movement_type": "adjustment",
+                    "reference": f"ADJ-{row[0]}",
+                    "description": f"تسوية رصيد - {note}" if note else "تسوية رصيد",
+                    "debit": debit,
+                    "credit": credit,
+                })
+        except Exception:
+            pass
+
+    entries_raw.sort(key=lambda x: x.get("date") or datetime.now())
+
+    running = float(opening_balance or 0.0)
+    entries = []
+    totals_orders = 0.0
+    totals_payments = 0.0
+    totals_returns = 0.0
+    totals_adjustments = 0.0
+
+    for item in entries_raw:
+        debit = float(item.get("debit") or 0.0)
+        credit = float(item.get("credit") or 0.0)
+        running = round(running + debit - credit, 2)
+        movement_type = item.get("movement_type") or "movement"
+        if movement_type == "order":
+            totals_orders += debit
+        elif movement_type == "payment":
+            totals_payments += credit
+        elif movement_type == "return":
+            totals_returns += credit
+        elif movement_type == "adjustment":
+            totals_adjustments += (debit - credit)
+        entries.append(AccountStatementEntry(
+            date=item["date"],
+            movement_type=movement_type,
+            reference=str(item.get("reference") or ""),
+            description=str(item.get("description") or ""),
+            debit=round(debit, 2),
+            credit=round(credit, 2),
+            running_balance=running,
+        ))
+
+    return PharmacyAccountStatementResponse(
+        pharmacy_id=pharmacy.id,
+        pharmacy_name=pharmacy.name,
+        date_from=(date_from or None),
+        date_to=(date_to or None),
+        opening_balance=round(float(opening_balance or 0.0), 2),
+        current_balance=round(float(pharmacy.balance or 0.0), 2),
+        totals={
+            "total_orders": round(totals_orders, 2),
+            "total_payments": round(totals_payments, 2),
+            "total_returns": round(totals_returns, 2),
+            "net_movement": round(totals_orders - totals_payments - totals_returns + totals_adjustments, 2),
+        },
+        entries=entries,
+    )
 
 
 @app.get("/data/export")

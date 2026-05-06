@@ -12,12 +12,12 @@ from rtl_utils import rtl
 
 
 BG = "#1e1e1e"
-CARD = "#2d2d2d"
-CARD_DARK = "#252525"
-GREEN = "#4CAF50"
+CARD = "#262b33"
+CARD_DARK = "#1f242c"
+GREEN = "#43a85b"
 BLUE = "#2196F3"
-ORANGE = "#FF9800"
-RED = "#f44336"
+ORANGE = "#d28a2d"
+RED = "#d05b52"
 CYAN = "#00BCD4"
 PURPLE = "#9C27B0"
 GRAY = "#9e9e9e"
@@ -170,7 +170,7 @@ class DashboardTab(ctk.CTkFrame):
         self.grid_rowconfigure(0, weight=1)
 
         self.scroll = ctk.CTkScrollableFrame(self, fg_color=BG)
-        self.scroll.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        self.scroll.grid(row=0, column=0, sticky="nsew", padx=24, pady=24)
         self.scroll.grid_columnconfigure(0, weight=1)
 
         self.create_header()
@@ -180,14 +180,16 @@ class DashboardTab(ctk.CTkFrame):
         self.dynamic_frame.grid_columnconfigure(0, weight=1)
 
     def create_header(self):
-        header = ctk.CTkFrame(self.scroll, fg_color=CARD, corner_radius=12)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 18))
+        header = ctk.CTkFrame(self.scroll, fg_color="#272d36", corner_radius=16, border_width=1, border_color="#313a46")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 24))
         header.grid_columnconfigure(0, weight=1)
         header.grid_propagate(False)
-        header.configure(height=144)
+        header.configure(height=156)
+
+        ctk.CTkFrame(header, fg_color="#313846", height=6, corner_radius=16).pack(fill="x", padx=14, pady=(10, 0))
 
         title_area = ctk.CTkFrame(header, fg_color="transparent")
-        title_area.grid(row=0, column=0, sticky="nsew", padx=36, pady=24)
+        title_area.grid(row=0, column=0, sticky="nsew", padx=36, pady=28)
         title_area.grid_columnconfigure(0, weight=1)
 
         text_area = ctk.CTkFrame(title_area, fg_color="transparent")
@@ -232,8 +234,9 @@ class DashboardTab(ctk.CTkFrame):
             command=self.refresh_dashboard,
             height=38,
             width=110,
-            fg_color=ORANGE,
-            hover_color="#fb8c00",
+            corner_radius=14,
+            fg_color="#b57a2f",
+            hover_color="#a56d28",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(side="right", padx=(0, 10))
 
@@ -243,8 +246,9 @@ class DashboardTab(ctk.CTkFrame):
             command=lambda: self.update_status("استخدم شاشة التقارير للتصدير"),
             height=38,
             width=140,
-            fg_color=GREEN,
-            hover_color="#45a049",
+            corner_radius=14,
+            fg_color="#3f8d56",
+            hover_color="#377c4b",
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(side="right", padx=(0, 10))
 
@@ -254,6 +258,7 @@ class DashboardTab(ctk.CTkFrame):
             command=lambda: self.update_status("التحديث التلقائي غير مفعل"),
             height=38,
             width=140,
+            corner_radius=14,
             fg_color=BLUE,
             hover_color="#1976D2",
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -280,21 +285,22 @@ class DashboardTab(ctk.CTkFrame):
         ).pack(side="left")
 
     def create_stat_card(self, parent, icon, title, value, subtitle, color, tab_name=None):
-        card = ctk.CTkFrame(parent, fg_color=color, corner_radius=12, height=154)
+        card = ctk.CTkFrame(parent, fg_color="#2a313c", corner_radius=16, border_width=1, border_color="#394252", height=162)
         card.grid_propagate(False)
+        ctk.CTkFrame(card, fg_color=color, height=6, corner_radius=16).pack(fill="x", padx=10, pady=(10, 0))
 
         if tab_name:
             card.bind("<Button-1>", lambda _event: self.navigate_to(tab_name))
 
         content = ctk.CTkFrame(card, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=20, pady=18)
+        content.pack(fill="both", expand=True, padx=20, pady=14)
         if tab_name:
             content.bind("<Button-1>", lambda _event: self.navigate_to(tab_name))
 
         top = ctk.CTkFrame(content, fg_color="transparent")
         top.pack(fill="x")
 
-        icon_label = ctk.CTkLabel(top, text=icon, font=ctk.CTkFont(size=34), text_color=WHITE)
+        icon_label = ctk.CTkLabel(top, text=icon, font=ctk.CTkFont(size=32), text_color=color)
         icon_label.pack(side="right")
 
         title_label = ctk.CTkLabel(
@@ -310,7 +316,7 @@ class DashboardTab(ctk.CTkFrame):
         value_label = ctk.CTkLabel(
             content,
             text=str(value),
-            font=ctk.CTkFont(size=34, weight="bold"),
+            font=ctk.CTkFont(size=40, weight="bold"),
             text_color=WHITE,
             anchor="e",
         )
@@ -333,11 +339,11 @@ class DashboardTab(ctk.CTkFrame):
         return card
 
     def create_small_stat_card(self, parent, title, value, subtitle, color, column, product_filter=None):
-        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=12, height=146)
-        card.grid(row=0, column=column, sticky="ew", padx=6)
+        card = ctk.CTkFrame(parent, fg_color="#252c36", corner_radius=16, border_width=1, border_color="#323c4a", height=152)
+        card.grid(row=0, column=column, sticky="ew", padx=8)
         card.grid_propagate(False)
 
-        ctk.CTkFrame(card, fg_color=color, height=4, corner_radius=4).pack(fill="x", padx=14, pady=(14, 18))
+        ctk.CTkFrame(card, fg_color=color, height=4, corner_radius=4).pack(fill="x", padx=14, pady=(12, 18))
 
         ctk.CTkLabel(
             card,
@@ -348,11 +354,12 @@ class DashboardTab(ctk.CTkFrame):
             justify="right",
         ).pack(anchor="e", padx=14)
 
+        display_color = color if str(value) != "0" else "#6f7a89"
         ctk.CTkLabel(
             card,
             text=str(value),
-            font=ctk.CTkFont(size=26, weight="bold"),
-            text_color=color,
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color=display_color,
             anchor="e",
         ).pack(anchor="e", padx=14, pady=(12, 2))
 
@@ -372,11 +379,11 @@ class DashboardTab(ctk.CTkFrame):
 
     def create_section_card(self, title, color, parent=None, row=None, column=None):
         parent = parent or self.dynamic_frame
-        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=12)
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=16, border_width=1, border_color="#323a46")
         if row is None:
-            card.pack(fill="x", pady=10)
+            card.pack(fill="x", pady=12)
         else:
-            card.grid(row=row, column=column, sticky="nsew", padx=10, pady=10)
+            card.grid(row=row, column=column, sticky="nsew", padx=10, pady=12)
             parent.grid_rowconfigure(row, weight=1)
 
         header = ctk.CTkFrame(card, fg_color="transparent")
@@ -454,7 +461,7 @@ class DashboardTab(ctk.CTkFrame):
         expiring = sum(1 for product in self.products if self.is_expiring_soon(product.get("expiry_date")))
 
         stats = ctk.CTkFrame(self.dynamic_frame, fg_color="transparent")
-        stats.pack(fill="x", padx=10, pady=(0, 24))
+        stats.pack(fill="x", padx=10, pady=(0, 30))
         stats.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         cards = [
@@ -468,7 +475,7 @@ class DashboardTab(ctk.CTkFrame):
             card.grid(row=0, column=column, sticky="ew", padx=10)
 
         risks = ctk.CTkFrame(self.dynamic_frame, fg_color="transparent")
-        risks.pack(fill="x", padx=10, pady=(0, 24))
+        risks.pack(fill="x", padx=10, pady=(0, 30))
         risks.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.create_small_stat_card(risks, "نافد", out_of_stock, "لا توجد كمية", RED, 0, "out_of_stock")

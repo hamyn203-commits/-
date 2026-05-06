@@ -765,6 +765,97 @@ class APIClient:
         except Exception as e:
             logger.error(f"Error in get_pharmacy_payments: {str(e)}")
             return []
+
+    # ==========================================
+    # المرتجعات (Returns)
+    # ==========================================
+
+    def add_return(
+        self,
+        pharmacy_id: int,
+        amount: float,
+        order_id: Optional[int] = None,
+        notes: str = "",
+        created_at: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            payload = {
+                "pharmacy_id": int(pharmacy_id),
+                "amount": float(amount or 0.0),
+                "order_id": int(order_id) if order_id else None,
+                "notes": notes or "",
+            }
+            if created_at:
+                payload["created_at"] = created_at
+            response = requests.post(f"{self.base_url}/returns", json=payload, timeout=self.timeout)
+            result = self._handle_response(response)
+            return result if isinstance(result, dict) else None
+        except Exception as e:
+            logger.error(f"Error in add_return: {str(e)}")
+            return None
+
+    def get_returns(self, pharmacy_id: Optional[int] = None, limit: int = 200) -> List[Dict[str, Any]]:
+        try:
+            params = {"limit": int(limit or 200)}
+            if pharmacy_id:
+                params["pharmacy_id"] = int(pharmacy_id)
+            response = requests.get(f"{self.base_url}/returns", params=params, timeout=self.timeout)
+            result = self._handle_response(response)
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.error(f"Error in get_returns: {str(e)}")
+            return []
+
+    def get_pharmacy_returns(self, pharmacy_id: int, limit: int = 200) -> List[Dict[str, Any]]:
+        try:
+            response = requests.get(
+                f"{self.base_url}/pharmacies/{int(pharmacy_id)}/returns",
+                params={"limit": int(limit or 200)},
+                timeout=self.timeout,
+            )
+            result = self._handle_response(response)
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.error(f"Error in get_pharmacy_returns: {str(e)}")
+            return []
+
+    # ==========================================
+    # كشف الحساب (Account Statement)
+    # ==========================================
+
+    def get_pharmacy_account_statement(
+        self,
+        pharmacy_id: int,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        جلب كشف حساب (دفتر حركة) لصيدلية.
+
+        Args:
+            pharmacy_id: معرف الصيدلية
+            date_from: من تاريخ (YYYY-MM-DD) اختياري
+            date_to: إلى تاريخ (YYYY-MM-DD) اختياري
+
+        Returns:
+            dict يحتوي على entries + totals + opening_balance أو None عند الفشل
+        """
+        try:
+            params = {}
+            if date_from:
+                params["date_from"] = date_from
+            if date_to:
+                params["date_to"] = date_to
+            response = requests.get(
+                f"{self.base_url}/pharmacies/{int(pharmacy_id)}/account-statement",
+                params=params or None,
+                timeout=self.timeout
+            )
+            result = self._handle_response(response)
+            return result if isinstance(result, dict) else None
+        except Exception as e:
+            logger.error(f"Error in get_pharmacy_account_statement: {str(e)}")
+            return None
     
     def login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         try:
@@ -808,11 +899,35 @@ class APIClient:
             logger.error(f"Error in delete_user: {str(e)}")
             return False
 
-    def get_audit_logs(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_audit_logs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        username: Optional[str] = None,
+        action: Optional[str] = None,
+        entity: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         try:
+            params = {"limit": limit, "offset": offset}
+            if username:
+                params["username"] = username
+            if action:
+                params["action"] = action
+            if entity:
+                params["entity"] = entity
+            if date_from:
+                params["date_from"] = date_from
+            if date_to:
+                params["date_to"] = date_to
+            if search:
+                params["search"] = search
+                
             response = requests.get(
                 f"{self.base_url}/audit-logs",
-                params={"limit": limit},
+                params=params,
                 timeout=self.timeout
             )
             result = self._handle_response(response)

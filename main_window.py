@@ -14,10 +14,14 @@ from purchases_tab import PurchasesTab
 from pharmacies_tab import PharmaciesTab
 from orders_tab import OrdersTab
 from payments_tab import PaymentsTab
+from returns_tab import ReturnsTab
 from settings_tab import SettingsTab
 from backup_tab import BackupTab
 from alerts_tab import AlertsTab
 from reports_tab import ReportsTab
+from account_statement_tab import AccountStatementTab
+from expiry_tab import ExpiryTab
+from audit_log_tab import AuditLogTab
 from rtl_utils import rtl
 
 # Configure appearance
@@ -170,13 +174,13 @@ class MainWindow:
         # Sidebar frame
         self.sidebar = ctk.CTkFrame(
             self.window, 
-            width=200, 
+            width=240, 
             corner_radius=0,
-            fg_color="#1a1a1a"
+            fg_color="#14161a"
         )
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
-        self.sidebar.configure(width=200)
+        self.sidebar.configure(width=240)
         
         # App title in sidebar
         title_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
@@ -185,8 +189,8 @@ class MainWindow:
         title_label = ctk.CTkLabel(
             title_frame,
             text=rtl("مخزن الندا"),
-            font=("Arial", 22, "bold"),
-            text_color="#4CAF50"
+            font=("Arial", 24, "bold"),
+            text_color="#55d66b"
         )
         title_label.pack()
         
@@ -194,245 +198,103 @@ class MainWindow:
             title_frame,
             text="Pharmacy System",
             font=("Arial", 12),
-            text_color="gray"
+            text_color="#8d97a6"
         )
         subtitle_label.pack()
         
         # Separator
-        separator = ctk.CTkFrame(self.sidebar, height=2, fg_color="#2d2d2d")
+        separator = ctk.CTkFrame(self.sidebar, height=2, fg_color="#242a33")
         separator.pack(fill="x", padx=10, pady=10)
         
         # Navigation buttons frame. It scrolls so future modules do not hide
         # the user panel or logout button on smaller screens.
         nav_frame = ctk.CTkScrollableFrame(
             self.sidebar,
-            fg_color="transparent",
-            width=190,
-            corner_radius=0,
-            scrollbar_button_color="#2d2d2d",
-            scrollbar_button_hover_color="#4CAF50"
+            fg_color="#151a20",
+            width=222,
+            corner_radius=12,
+            scrollbar_button_color="#2f3642",
+            scrollbar_button_hover_color="#55d66b"
         )
-        nav_frame.pack(pady=(12, 8), padx=0, fill="both", expand=True)
-        
-        # Dashboard button
-        self.dashboard_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الرئيسية"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_dashboard
-        )
-        self.dashboard_btn.pack(pady=5, padx=10, fill="x")
-        
-        # Products button
-        self.products_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("المنتجات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_products
-        )
-        self.products_btn.pack(pady=5, padx=10, fill="x")
+        nav_frame.pack(pady=(10, 8), padx=8, fill="both", expand=True)
 
-        self.categories_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("التصنيفات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_categories
-        )
-        self.categories_btn.pack(pady=5, padx=10, fill="x")
+        self.nav_buttons = {}
+        self.nav_meta = {}
+        self.current_active_tab = "dashboard"
+        self.nav_default_style = {
+            "fg_color": "#151a20",
+            "hover_color": "#232a36",
+            "text_color": "#cfd8e6",
+            "border_width": 1,
+            "border_color": "#202733",
+        }
+        self.nav_active_style = {
+            "fg_color": "#3fbf5d",
+            "hover_color": "#35ad53",
+            "text_color": "#ffffff",
+            "border_width": 0,
+            "border_color": "#3fbf5d",
+        }
 
-        self.suppliers_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الموردين"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_suppliers
-        )
-        self.suppliers_btn.pack(pady=5, padx=10, fill="x")
+        def add_nav_section(title):
+            ctk.CTkLabel(
+                nav_frame,
+                text=title,
+                font=("Arial", 11, "bold"),
+                text_color="#7e8a9d",
+                anchor="e",
+                justify="right",
+            ).pack(fill="x", padx=12, pady=(8, 4))
 
-        self.purchases_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("المشتريات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_purchases
-        )
-        self.purchases_btn.pack(pady=5, padx=10, fill="x")
-        
-        # Pharmacies button
-        self.pharmacies_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الصيدليات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_pharmacies
-        )
-        self.pharmacies_btn.pack(pady=5, padx=10, fill="x")
-        
-        # Orders button
-        self.orders_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الطلبات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_orders
-        )
-        self.orders_btn.pack(pady=5, padx=10, fill="x")
-        
-        # Payments button
-        self.payments_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("التحصيلات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_payments
-        )
-        self.payments_btn.pack(pady=5, padx=10, fill="x")
+        def add_nav_button(btn_attr, tab_key, text, icon, command):
+            self.nav_meta[tab_key] = {"text": text, "icon": icon}
+            btn = ctk.CTkButton(
+                nav_frame,
+                text=f"{icon}  {text}",
+                width=196,
+                height=42,
+                corner_radius=10,
+                font=("Arial", 13, "normal"),
+                anchor="e",
+                command=command,
+                **self.nav_default_style,
+            )
+            btn.pack(pady=4, padx=12, fill="x")
+            btn.bind("<Enter>", lambda _e, b=btn, k=tab_key: self.on_nav_hover_enter(b, k))
+            btn.bind("<Leave>", lambda _e, b=btn, k=tab_key: self.on_nav_hover_leave(b, k))
+            setattr(self, btn_attr, btn)
+            self.nav_buttons[tab_key] = btn
 
-        self.returns_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("المرتجعات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_returns
-        )
-        self.returns_btn.pack(pady=5, padx=10, fill="x")
+        add_nav_section("عام")
+        add_nav_button("dashboard_btn", "dashboard", "الرئيسية", "🏠", self.show_dashboard)
 
-        self.statements_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("كشف الحساب"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_statements
-        )
-        self.statements_btn.pack(pady=5, padx=10, fill="x")
+        add_nav_section("المخزون")
+        add_nav_button("products_btn", "products", "المنتجات", "📦", self.show_products)
+        add_nav_button("categories_btn", "categories", "التصنيفات", "🗂", self.show_categories)
+        add_nav_button("suppliers_btn", "suppliers", "الموردين", "🚚", self.show_suppliers)
+        add_nav_button("purchases_btn", "purchases", "المشتريات", "🧾", self.show_purchases)
 
-        self.reports_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("التقارير"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_reports
-        )
-        self.reports_btn.pack(pady=5, padx=10, fill="x")
+        add_nav_section("المبيعات والحسابات")
+        add_nav_button("pharmacies_btn", "pharmacies", "الصيدليات", "🏥", self.show_pharmacies)
+        add_nav_button("orders_btn", "orders", "الطلبات", "🛒", self.show_orders)
+        add_nav_button("payments_btn", "payments", "التحصيلات", "💵", self.show_payments)
+        add_nav_button("returns_btn", "returns", "المرتجعات", "↩", self.show_returns)
+        add_nav_button("statements_btn", "statements", "كشف الحساب", "📒", self.show_statements)
 
-        self.alerts_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("التنبيهات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_alerts
-        )
-        self.alerts_btn.pack(pady=5, padx=10, fill="x")
-
-        self.expiry_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الصلاحية"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_expiry
-        )
-        self.expiry_btn.pack(pady=5, padx=10, fill="x")
-
-        self.audit_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("سجل العمليات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_audit_log
-        )
-        self.audit_btn.pack(pady=5, padx=10, fill="x")
-
-        self.backup_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("النسخ الاحتياطي"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_backup
-        )
-        self.backup_btn.pack(pady=5, padx=10, fill="x")
-
-        self.settings_btn = ctk.CTkButton(
-            nav_frame,
-            text=rtl("الإعدادات"),
-            width=180,
-            height=45,
-            font=("Arial", 14, "bold"),
-            fg_color="transparent",
-            hover_color="#2d2d2d",
-            anchor="w",
-            command=self.show_settings
-        )
-        self.settings_btn.pack(pady=5, padx=10, fill="x")
+        add_nav_section("المتابعة")
+        add_nav_button("reports_btn", "reports", "التقارير", "📊", self.show_reports)
+        add_nav_button("alerts_btn", "alerts", "التنبيهات", "🔔", self.show_alerts)
+        add_nav_button("expiry_btn", "expiry", "الصلاحية", "⏳", self.show_expiry)
+        add_nav_button("audit_btn", "audit", "سجل العمليات", "🧠", self.show_audit_log)
+        add_nav_button("backup_btn", "backup", "النسخ الاحتياطي", "💾", self.show_backup)
+        add_nav_button("settings_btn", "settings", "الإعدادات", "⚙", self.show_settings)
         
         # Spacer to push logout button to bottom
         spacer = ctk.CTkFrame(self.sidebar, fg_color="transparent", height=4)
         spacer.pack(fill="x")
         
         # User info frame
-        user_frame = ctk.CTkFrame(self.sidebar, fg_color="#2d2d2d", corner_radius=10)
+        user_frame = ctk.CTkFrame(self.sidebar, fg_color="#1b212b", corner_radius=12, border_width=1, border_color="#2a3341")
         user_frame.pack(pady=(0, 15), padx=10, fill="x")
         
         user_icon = ctk.CTkLabel(
@@ -446,28 +308,28 @@ class MainWindow:
             user_frame,
             text=self.username,
             font=("Arial", 12, "bold"),
-            text_color="#4CAF50"
+            text_color="#55d66b"
         )
         user_name.pack()
         
         user_role = ctk.CTkLabel(
             user_frame,
-            text=rtl("مدير النظام"),
+            text=rtl(self.get_role_label()),
             font=("Arial", 10),
-            text_color="gray"
+            text_color="#9aa6b8"
         )
         user_role.pack(pady=(0, 10))
         
         # Logout button
         self.logout_btn = ctk.CTkButton(
             self.sidebar,
-            text=rtl("تسجيل خروج"),
+            text=rtl("🚪  تسجيل خروج"),
             width=180,
             height=40,
             font=("Arial", 13, "bold"),
-            fg_color="#c0392b",
-            hover_color="#e74c3c",
-            corner_radius=8,
+            fg_color="#b73333",
+            hover_color="#c63f3f",
+            corner_radius=10,
             command=self.logout
         )
         self.logout_btn.pack(pady=(0, 20), padx=10, fill="x")
@@ -617,69 +479,38 @@ class MainWindow:
     
     def set_active_button(self, active_button: str):
         """Highlight the active navigation button"""
-        # Default style for inactive buttons
-        inactive_style = {
-            "fg_color": "transparent",
-            "hover_color": "#2d2d2d"
-        }
-        
-        # Active style
-        active_style = {
-            "fg_color": "#4CAF50",
-            "hover_color": "#45a049"
-        }
-        
-        # Reset all buttons to inactive style
-        self.dashboard_btn.configure(**inactive_style)
-        self.products_btn.configure(**inactive_style)
-        self.categories_btn.configure(**inactive_style)
-        self.suppliers_btn.configure(**inactive_style)
-        self.purchases_btn.configure(**inactive_style)
-        self.pharmacies_btn.configure(**inactive_style)
-        self.orders_btn.configure(**inactive_style)
-        self.payments_btn.configure(**inactive_style)
-        self.returns_btn.configure(**inactive_style)
-        self.statements_btn.configure(**inactive_style)
-        self.reports_btn.configure(**inactive_style)
-        self.alerts_btn.configure(**inactive_style)
-        self.expiry_btn.configure(**inactive_style)
-        self.audit_btn.configure(**inactive_style)
-        self.backup_btn.configure(**inactive_style)
-        self.settings_btn.configure(**inactive_style)
-        
-        # Highlight active button
-        if active_button == "dashboard":
-            self.dashboard_btn.configure(**active_style)
-        elif active_button == "products":
-            self.products_btn.configure(**active_style)
-        elif active_button == "categories":
-            self.categories_btn.configure(**active_style)
-        elif active_button == "suppliers":
-            self.suppliers_btn.configure(**active_style)
-        elif active_button == "purchases":
-            self.purchases_btn.configure(**active_style)
-        elif active_button == "pharmacies":
-            self.pharmacies_btn.configure(**active_style)
-        elif active_button == "orders":
-            self.orders_btn.configure(**active_style)
-        elif active_button == "payments":
-            self.payments_btn.configure(**active_style)
-        elif active_button == "returns":
-            self.returns_btn.configure(**active_style)
-        elif active_button == "statements":
-            self.statements_btn.configure(**active_style)
-        elif active_button == "reports":
-            self.reports_btn.configure(**active_style)
-        elif active_button == "alerts":
-            self.alerts_btn.configure(**active_style)
-        elif active_button == "expiry":
-            self.expiry_btn.configure(**active_style)
-        elif active_button == "audit":
-            self.audit_btn.configure(**active_style)
-        elif active_button == "backup":
-            self.backup_btn.configure(**active_style)
-        elif active_button == "settings":
-            self.settings_btn.configure(**active_style)
+        if not hasattr(self, "nav_buttons"):
+            return
+        self.current_active_tab = active_button
+        for key, button in self.nav_buttons.items():
+            try:
+                meta = self.nav_meta.get(key, {})
+                label = meta.get("text", "")
+                icon = meta.get("icon", "")
+                button.configure(text=f"{icon}  {label}")
+                if key == active_button:
+                    button.configure(**self.nav_active_style)
+                else:
+                    button.configure(**self.nav_default_style)
+            except Exception:
+                pass
+
+    def on_nav_hover_enter(self, button, tab_key):
+        if tab_key == self.current_active_tab:
+            return
+        try:
+            button.configure(fg_color="#202733", text_color="#e5edf9", border_color="#2f3947")
+        except Exception:
+            pass
+
+    def on_nav_hover_leave(self, button, tab_key):
+        try:
+            if tab_key == self.current_active_tab:
+                button.configure(**self.nav_active_style)
+            else:
+                button.configure(**self.nav_default_style)
+        except Exception:
+            pass
     
     def update_status(self, message: str):
         """
@@ -905,28 +736,64 @@ class MainWindow:
         self.current_tab.pack(fill="both", expand=True)
 
     def show_returns(self):
-        """Display returns placeholder."""
+        """Display returns tab."""
         if not self.guard_tab_access("returns"):
             return
-        self.show_placeholder("المرتجعات", "returns")
+        self.clear_content()
+        self.update_header_title("المرتجعات")
+        self.set_active_button("returns")
+
+        self.current_tab = ReturnsTab(
+            self.content_area,
+            api_client=self.api_client,
+            status_callback=self.update_status,
+        )
+        self.current_tab.pack(fill="both", expand=True)
 
     def show_statements(self):
-        """Display account statements placeholder."""
+        """Display account statement tab."""
         if not self.guard_tab_access("statements"):
             return
-        self.show_placeholder("كشف الحساب", "statements")
+        self.clear_content()
+        self.update_header_title("كشف الحساب")
+        self.set_active_button("statements")
+
+        self.current_tab = AccountStatementTab(
+            self.content_area,
+            api_client=self.api_client,
+            status_callback=self.update_status,
+        )
+        self.current_tab.pack(fill="both", expand=True)
 
     def show_expiry(self):
-        """Display expiry tracking placeholder."""
+        """Display expiry tracking tab."""
         if not self.guard_tab_access("expiry"):
             return
-        self.show_placeholder("متابعة الصلاحية", "expiry")
+        self.clear_content()
+        self.update_header_title("متابعة الصلاحية")
+        self.set_active_button("expiry")
+        self.current_tab = ExpiryTab(
+            self.content_area,
+            api_client=self.api_client,
+            status_callback=self.update_status,
+            navigation_callback=self.navigate_to_tab
+        )
+        self.current_tab.pack(fill="both", expand=True)
 
     def show_audit_log(self):
-        """Display audit log placeholder."""
+        """Display audit log tab."""
         if not self.guard_tab_access("audit"):
             return
-        self.show_placeholder("سجل العمليات", "audit")
+        self.clear_content()
+        self.update_header_title("سجل العمليات")
+        self.set_active_button("audit")
+
+        self.current_tab = AuditLogTab(
+            self.content_area,
+            api_client=self.api_client,
+            status_callback=self.update_status
+        )
+        self.current_tab.pack(fill="both", expand=True)
 
     def show_reports(self):
         """Display reports tab."""
